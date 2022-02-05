@@ -3,16 +3,15 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 
-use near_crypto::{InMemorySigner, Signer};
-use near_primitives::types::{AccountId, Balance};
-
 use super::{
     Account, AllowDevAccountCreation, AllowStatePatching, CallExecution, Contract, NetworkClient,
     NetworkInfo, TopLevelAccountCreator,
 };
+
 use crate::network::server::SandboxServer;
 use crate::network::Info;
 use crate::rpc::client::Client;
+use crate::types::{AccountId, Balance, InMemorySigner, SecretKey};
 
 // Constant taken from nearcore crate to avoid dependency
 pub(crate) const NEAR_BASE: Balance = 1_000_000_000_000_000_000_000_000;
@@ -32,7 +31,7 @@ impl Sandbox {
         path
     }
 
-    fn root_signer(&self) -> InMemorySigner {
+    pub(crate) fn root_signer(&self) -> InMemorySigner {
         let mut path = Self::home_dir(self.server.rpc_port);
         path.push("validator_key.json");
 
@@ -68,19 +67,15 @@ impl TopLevelAccountCreator for Sandbox {
     async fn create_tla(
         &self,
         id: AccountId,
-        signer: InMemorySigner,
+        sk: SecretKey,
     ) -> anyhow::Result<CallExecution<Account>> {
         let root_signer = self.root_signer();
         let outcome = self
             .client
-            .create_account(
-                &root_signer,
-                id.clone(),
-                signer.public_key(),
-                DEFAULT_DEPOSIT,
-            )
+            .create_account(&root_signer, &id, sk.public_key(), DEFAULT_DEPOSIT)
             .await?;
 
+        let signer = InMemorySigner::from_secret_key(id.clone(), sk);
         Ok(CallExecution {
             result: Account::new(id, signer),
             details: outcome.into(),
@@ -90,21 +85,22 @@ impl TopLevelAccountCreator for Sandbox {
     async fn create_tla_and_deploy(
         &self,
         id: AccountId,
-        signer: InMemorySigner,
-        wasm: Vec<u8>,
+        sk: SecretKey,
+        wasm: &[u8],
     ) -> anyhow::Result<CallExecution<Contract>> {
         let root_signer = self.root_signer();
         let outcome = self
             .client
             .create_account_and_deploy(
                 &root_signer,
-                id.clone(),
-                signer.public_key(),
+                &id,
+                sk.public_key(),
                 DEFAULT_DEPOSIT,
-                wasm,
+                wasm.into(),
             )
             .await?;
 
+        let signer = InMemorySigner::from_secret_key(id.clone(), sk);
         Ok(CallExecution {
             result: Contract::new(id, signer),
             details: outcome.into(),

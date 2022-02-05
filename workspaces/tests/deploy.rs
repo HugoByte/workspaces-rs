@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-
+use test_log::test;
 use workspaces::prelude::*;
 
 const NFT_WASM_FILEPATH: &str = "../examples/res/non_fungible_token.wasm";
@@ -28,34 +28,25 @@ fn expected() -> NftMetadata {
     serde_json::from_str(EXPECTED_NFT_METADATA).unwrap()
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_dev_deploy() -> anyhow::Result<()> {
     let worker = workspaces::sandbox();
     let wasm = std::fs::read(NFT_WASM_FILEPATH)?;
-    let contract = worker.dev_deploy(wasm).await?;
+    let contract = worker.dev_deploy(&wasm).await?;
 
-    let _result = worker
-        .call(
-            &contract,
-            "new_default_meta".into(),
-            serde_json::json!({
-                "owner_id": contract.id()
-            })
-            .to_string()
-            .into_bytes(),
-            None,
-        )
+    let _result = contract
+        .call(&worker, "new_default_meta")
+        .args_json(serde_json::json!({
+            "owner_id": contract.id()
+        }))?
+        .transact()
         .await?;
 
-    let result = worker
-        .view(
-            contract.id().clone(),
-            "nft_metadata".to_string(),
-            Vec::new(),
-        )
-        .await?;
+    let actual: NftMetadata = contract
+        .view(&worker, "nft_metadata", Vec::new())
+        .await?
+        .json()?;
 
-    let actual: NftMetadata = serde_json::from_value(result).unwrap();
     assert_eq!(actual, expected());
 
     Ok(())

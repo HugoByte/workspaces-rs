@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use near_crypto::InMemorySigner;
-use near_primitives::types::{AccountId, Balance, StoreKey};
+use near_primitives::types::{Balance, StoreKey};
 
-use crate::network::Info;
 use crate::network::{
     Account, AllowDevAccountCreation, CallExecution, CallExecutionDetails, Contract, NetworkClient,
-    NetworkInfo, StatePatcher, TopLevelAccountCreator,
+    NetworkInfo, StatePatcher, TopLevelAccountCreator, ViewResultDetails,
 };
-use crate::rpc::client::Client;
+use crate::network::{Info, Sandbox};
+use crate::rpc::client::{Client, DEFAULT_CALL_DEPOSIT, DEFAULT_CALL_FN_GAS};
+use crate::rpc::patch::ImportContractBuilder;
+use crate::types::{AccountId, Gas, InMemorySigner, SecretKey};
 use crate::worker::Worker;
+use crate::Network;
 
 impl<T> Clone for Worker<T> {
     fn clone(&self) -> Self {
@@ -30,18 +32,18 @@ where
     async fn create_tla(
         &self,
         id: AccountId,
-        signer: InMemorySigner,
+        sk: SecretKey,
     ) -> anyhow::Result<CallExecution<Account>> {
-        self.workspace.create_tla(id, signer).await
+        self.workspace.create_tla(id, sk).await
     }
 
     async fn create_tla_and_deploy(
         &self,
         id: AccountId,
-        signer: InMemorySigner,
-        wasm: Vec<u8>,
+        sk: SecretKey,
+        wasm: &[u8],
     ) -> anyhow::Result<CallExecution<Contract>> {
-        self.workspace.create_tla_and_deploy(id, signer, wasm).await
+        self.workspace.create_tla_and_deploy(id, sk, wasm).await
     }
 }
 
@@ -61,11 +63,19 @@ where
 {
     async fn patch_state(
         &self,
-        contract_id: AccountId,
+        contract_id: &AccountId,
         key: String,
         value: Vec<u8>,
     ) -> anyhow::Result<()> {
         self.workspace.patch_state(contract_id, key, value).await
+    }
+
+    fn import_contract<'a, 'b>(
+        &'b self,
+        id: &AccountId,
+        worker: &'a Worker<impl Network>,
+    ) -> ImportContractBuilder<'a, 'b> {
+        self.workspace.import_contract(id, worker)
     }
 }
 
@@ -80,18 +90,19 @@ where
     pub async fn call(
         &self,
         contract: &Contract,
-        method: String,
+        function: &str,
         args: Vec<u8>,
+        gas: Option<Gas>,
         deposit: Option<Balance>,
     ) -> anyhow::Result<CallExecutionDetails> {
         self.client()
             .call(
                 contract.signer(),
-                contract.id().clone(),
-                method,
+                contract.id(),
+                function.into(),
                 args,
-                None,
-                deposit,
+                gas.unwrap_or(DEFAULT_CALL_FN_GAS),
+                deposit.unwrap_or(DEFAULT_CALL_DEPOSIT),
             )
             .await
             .map(Into::into)
@@ -99,25 +110,27 @@ where
 
     pub async fn view(
         &self,
-        contract_id: AccountId,
-        method_name: String,
+        contract_id: &AccountId,
+        function: &str,
         args: Vec<u8>,
-    ) -> anyhow::Result<serde_json::Value> {
-        self.client().view(contract_id, method_name, args).await
+    ) -> anyhow::Result<ViewResultDetails> {
+        self.client()
+            .view(contract_id.clone(), function.into(), args)
+            .await
     }
 
     pub async fn view_state(
         &self,
-        contract_id: AccountId,
+        contract_id: &AccountId,
         prefix: Option<StoreKey>,
     ) -> anyhow::Result<HashMap<String, Vec<u8>>> {
-        self.client().view_state(contract_id, prefix).await
+        self.client().view_state(contract_id.clone(), prefix).await
     }
 
     pub async fn transfer_near(
         &self,
         signer: &InMemorySigner,
-        receiver_id: AccountId,
+        receiver_id: &AccountId,
         amount_yocto: Balance,
     ) -> anyhow::Result<CallExecutionDetails> {
         self.client()
@@ -128,13 +141,21 @@ where
 
     pub async fn delete_account(
         &self,
-        account_id: AccountId,
+        account_id: &AccountId,
         signer: &InMemorySigner,
-        beneficiary_id: AccountId,
+        beneficiary_id: &AccountId,
     ) -> anyhow::Result<CallExecutionDetails> {
         self.client()
             .delete_account(signer, account_id, beneficiary_id)
             .await
             .map(Into::into)
+    }
+}
+
+impl Worker<Sandbox> {
+    pub fn root_account(&self) -> Account {
+        let account_id = self.info().root_id.clone();
+        let signer = self.workspace.root_signer();
+        Account::new(account_id, signer)
     }
 }

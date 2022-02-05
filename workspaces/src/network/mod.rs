@@ -1,5 +1,6 @@
 mod account;
 mod info;
+mod mainnet;
 mod result;
 mod sandbox;
 mod server;
@@ -7,20 +8,22 @@ mod testnet;
 
 use async_trait::async_trait;
 
-use near_crypto::{InMemorySigner, KeyType, Signer};
 use near_jsonrpc_client::methods::sandbox_patch_state::RpcSandboxPatchStateRequest;
 use near_primitives::state_record::StateRecord;
-use near_primitives::types::AccountId;
 
 pub(crate) use crate::network::info::Info;
 use crate::rpc::client::Client;
+use crate::rpc::patch::ImportContractBuilder;
+use crate::types::{AccountId, KeyType, SecretKey};
+use crate::Worker;
 
 pub use crate::network::account::{Account, Contract};
-pub use crate::network::result::{CallExecution, CallExecutionDetails};
+pub use crate::network::mainnet::Mainnet;
+pub use crate::network::result::{CallExecution, CallExecutionDetails, ViewResultDetails};
 pub use crate::network::sandbox::Sandbox;
 pub use crate::network::testnet::Testnet;
 
-const DEV_ACCOUNT_SEED: &str = "testificate";
+pub(crate) const DEV_ACCOUNT_SEED: &str = "testificate";
 
 pub trait NetworkClient {
     fn client(&self) -> &Client;
@@ -35,14 +38,14 @@ pub trait TopLevelAccountCreator {
     async fn create_tla(
         &self,
         id: AccountId,
-        signer: InMemorySigner,
+        sk: SecretKey,
     ) -> anyhow::Result<CallExecution<Account>>;
 
     async fn create_tla_and_deploy(
         &self,
         id: AccountId,
-        signer: InMemorySigner,
-        wasm: Vec<u8>,
+        sk: SecretKey,
+        wasm: &[u8],
     ) -> anyhow::Result<CallExecution<Contract>>;
 }
 
@@ -52,9 +55,9 @@ pub trait AllowDevAccountCreation {}
 
 #[async_trait]
 pub trait DevAccountDeployer {
-    async fn dev_generate(&self) -> (AccountId, InMemorySigner);
-    async fn dev_create(&self) -> anyhow::Result<Account>;
-    async fn dev_deploy(&self, wasm: Vec<u8>) -> anyhow::Result<Contract>;
+    async fn dev_generate(&self) -> (AccountId, SecretKey);
+    async fn dev_create_account(&self) -> anyhow::Result<Account>;
+    async fn dev_deploy(&self, wasm: &[u8]) -> anyhow::Result<Contract>;
 }
 
 #[async_trait]
@@ -62,34 +65,31 @@ impl<T> DevAccountDeployer for T
 where
     T: TopLevelAccountCreator + NetworkInfo + AllowDevAccountCreation + Send + Sync,
 {
-    async fn dev_generate(&self) -> (AccountId, InMemorySigner) {
-        let account_id = crate::rpc::tool::random_account_id();
-        let signer =
-            InMemorySigner::from_seed(account_id.clone(), KeyType::ED25519, DEV_ACCOUNT_SEED);
+    async fn dev_generate(&self) -> (AccountId, SecretKey) {
+        let id = crate::rpc::tool::random_account_id();
+        let sk = SecretKey::from_seed(KeyType::ED25519, DEV_ACCOUNT_SEED);
 
         let mut savepath = self.info().keystore_path.clone();
 
         // TODO: potentially make this into the async version:
         std::fs::create_dir_all(savepath.clone()).unwrap();
 
-        savepath = savepath.join(account_id.to_string());
+        savepath = savepath.join(id.to_string());
         savepath.set_extension("json");
-        signer.write_to_file(&savepath);
+        crate::rpc::tool::write_cred_to_file(&savepath, id.clone(), sk.clone());
 
-        (account_id, signer)
+        (id, sk)
     }
 
-    async fn dev_create(&self) -> anyhow::Result<Account> {
-        let (account_id, signer) = self.dev_generate().await;
-        let account = self.create_tla(account_id.clone(), signer).await?;
+    async fn dev_create_account(&self) -> anyhow::Result<Account> {
+        let (id, sk) = self.dev_generate().await;
+        let account = self.create_tla(id.clone(), sk).await?;
         account.into()
     }
 
-    async fn dev_deploy(&self, wasm: Vec<u8>) -> anyhow::Result<Contract> {
-        let (account_id, signer) = self.dev_generate().await;
-        let contract = self
-            .create_tla_and_deploy(account_id.clone(), signer, wasm)
-            .await?;
+    async fn dev_deploy(&self, wasm: &[u8]) -> anyhow::Result<Contract> {
+        let (id, sk) = self.dev_generate().await;
+        let contract = self.create_tla_and_deploy(id.clone(), sk, wasm).await?;
         contract.into()
     }
 }
@@ -100,10 +100,16 @@ pub trait AllowStatePatching {}
 pub trait StatePatcher {
     async fn patch_state(
         &self,
-        contract_id: AccountId,
+        contract_id: &AccountId,
         key: String,
         value: Vec<u8>,
     ) -> anyhow::Result<()>;
+
+    fn import_contract<'a, 'b>(
+        &'b self,
+        id: &AccountId,
+        worker: &'a Worker<impl Network>,
+    ) -> ImportContractBuilder<'a, 'b>;
 }
 
 #[async_trait]
@@ -113,12 +119,12 @@ where
 {
     async fn patch_state(
         &self,
-        contract_id: AccountId,
+        contract_id: &AccountId,
         key: String,
         value: Vec<u8>,
     ) -> anyhow::Result<()> {
         let state = StateRecord::Data {
-            account_id: contract_id,
+            account_id: contract_id.to_owned(),
             data_key: key.into(),
             value,
         };
@@ -132,6 +138,14 @@ where
             .map_err(|err| anyhow::anyhow!("Failed to patch state: {:?}", err))?;
 
         Ok(())
+    }
+
+    fn import_contract<'a, 'b>(
+        &'b self,
+        id: &AccountId,
+        worker: &'a Worker<impl Network>,
+    ) -> ImportContractBuilder<'a, 'b> {
+        ImportContractBuilder::new(id.to_owned(), worker.client(), self.client())
     }
 }
 

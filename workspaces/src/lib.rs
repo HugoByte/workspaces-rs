@@ -1,10 +1,12 @@
-mod exports;
 mod network;
 mod rpc;
+mod types;
 mod worker;
 
 pub mod prelude;
 
-pub use exports::*;
-pub use network::{Contract, DevNetwork, Network};
-pub use worker::{sandbox, testnet, with_sandbox, with_testnet, Worker};
+pub use network::{Account, Contract, DevNetwork, Network};
+pub use types::{AccountId, BlockHeight, CryptoHash, InMemorySigner};
+pub use worker::{
+    mainnet, mainnet_archival, sandbox, testnet, with_mainnet, with_sandbox, with_testnet, Worker,
+};

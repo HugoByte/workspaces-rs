@@ -1,6 +1,9 @@
-use serde_json::json;
+// Required since `test_log` adds more recursion than the standard recursion limit of 128
+#![recursion_limit = "256"]
 
-use workspaces::borsh::{self, BorshDeserialize, BorshSerialize};
+use borsh::{self, BorshDeserialize, BorshSerialize};
+use serde_json::json;
+use test_log::test;
 use workspaces::prelude::*;
 use workspaces::{AccountId, DevNetwork, Worker};
 
@@ -21,22 +24,17 @@ async fn view_status_state(
     worker: Worker<impl DevNetwork>,
 ) -> anyhow::Result<(AccountId, StatusMessage)> {
     let wasm = std::fs::read(STATUS_MSG_WASM_FILEPATH)?;
-    let contract = worker.dev_deploy(wasm).await.unwrap();
+    let contract = worker.dev_deploy(&wasm).await.unwrap();
 
-    worker
-        .call(
-            &contract,
-            "set_status".into(),
-            json!({
+    contract
+        .call(&worker, "set_status")
+        .args_json(json!({
                 "message": "hello",
-            })
-            .to_string()
-            .into_bytes(),
-            None,
-        )
+        }))?
+        .transact()
         .await?;
 
-    let mut state_items = worker.view_state(contract.id().clone(), None).await?;
+    let mut state_items = worker.view_state(contract.id(), None).await?;
     let state = state_items
         .remove("STATE")
         .ok_or_else(|| anyhow::anyhow!("Could not retrieve STATE"))?;
@@ -45,7 +43,7 @@ async fn view_status_state(
     Ok((contract.id().clone(), status_msg))
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_view_state() -> anyhow::Result<()> {
     let worker = workspaces::sandbox();
     let (contract_id, status_msg) = view_status_state(worker).await?;
@@ -63,7 +61,7 @@ async fn test_view_state() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_patch_state() -> anyhow::Result<()> {
     let worker = workspaces::sandbox();
     let (contract_id, mut status_msg) = view_status_state(worker.clone()).await?;
@@ -73,26 +71,22 @@ async fn test_patch_state() -> anyhow::Result<()> {
     });
 
     worker
-        .patch_state(
-            contract_id.clone(),
-            "STATE".to_string(),
-            status_msg.try_to_vec()?,
-        )
+        .patch_state(&contract_id, "STATE".to_string(), status_msg.try_to_vec()?)
         .await?;
 
-    let result = worker
+    let status: String = worker
         .view(
-            contract_id.clone(),
-            "get_status".into(),
+            &contract_id,
+            "get_status",
             json!({
                 "account_id": "alice.near",
             })
             .to_string()
             .into_bytes(),
         )
-        .await?;
+        .await?
+        .json()?;
 
-    let status: String = serde_json::from_value(result).unwrap();
     assert_eq!(status, "hello world".to_string());
 
     Ok(())
