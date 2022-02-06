@@ -30,7 +30,7 @@ impl Account {
         &self.id
     }
 
-    pub(crate) fn signer(&self) -> &InMemorySigner {
+    pub fn signer(&self) -> &InMemorySigner {
         &self.signer
     }
 
@@ -136,7 +136,7 @@ impl Contract {
         &self.account
     }
 
-    pub(crate) fn signer(&self) -> &InMemorySigner {
+    pub fn signer(&self) -> &InMemorySigner {
         self.account.signer()
     }
 
