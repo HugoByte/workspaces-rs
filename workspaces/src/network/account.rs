@@ -8,6 +8,7 @@ use crate::{Network, Worker};
 
 use super::{CallExecution, CallExecutionDetails, ViewResultDetails};
 
+#[derive(Clone)]
 pub struct Account {
     pub(crate) id: AccountId,
     pub(crate) signer: InMemorySigner,
