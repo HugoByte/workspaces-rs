@@ -14,7 +14,7 @@ use near_primitives::state_record::StateRecord;
 pub(crate) use crate::network::info::Info;
 use crate::rpc::client::Client;
 use crate::rpc::patch::ImportContractBuilder;
-use crate::types::{AccountId, KeyType, SecretKey, InMemorySigner};
+use crate::types::{AccountId, InMemorySigner, KeyType, SecretKey};
 use crate::Worker;
 
 pub use crate::network::account::{Account, Contract};
@@ -24,11 +24,6 @@ pub use crate::network::sandbox::Sandbox;
 pub use crate::network::testnet::Testnet;
 
 pub(crate) const DEV_ACCOUNT_SEED: &str = "testificate";
-
-#[async_trait]
-pub trait EmptyContract {
-    async fn create_empty_contract(&self) -> anyhow::Result<Contract>;
-}
 
 pub trait NetworkClient {
     fn client(&self) -> &Client;
@@ -63,16 +58,7 @@ pub trait DevAccountDeployer {
     async fn dev_generate(&self) -> (AccountId, SecretKey);
     async fn dev_create_account(&self) -> anyhow::Result<Account>;
     async fn dev_deploy(&self, wasm: &[u8]) -> anyhow::Result<Contract>;
-}
-
-#[async_trait]
-impl<T> EmptyContract for T where T: DevNetwork {
-    async fn create_empty_contract(&self) -> anyhow::Result<Contract> {
-        let (id, sk) = self.dev_generate().await;
-        let signer = InMemorySigner::from_secret_key(id.clone(), sk);
-        let contract = Contract::new(id, signer);
-        anyhow::Ok(contract)
-    }
+    async fn create_empty_contract(&self) -> anyhow::Result<Contract>;
 }
 
 #[async_trait]
@@ -106,6 +92,13 @@ where
         let (id, sk) = self.dev_generate().await;
         let contract = self.create_tla_and_deploy(id.clone(), sk, wasm).await?;
         contract.into()
+    }
+
+    async fn create_empty_contract(&self) -> anyhow::Result<Contract> {
+        let (id, sk) = self.dev_generate().await;
+        let signer = InMemorySigner::from_secret_key(id.clone(), sk);
+        let contract = Contract::new(id, signer);
+        anyhow::Ok(contract)
     }
 }
 
