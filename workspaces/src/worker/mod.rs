@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use crate::network::{Mainnet, Network, Sandbox, Testnet};
 
-#[derive(Clone)]
 pub struct Worker<T> {
     workspace: Arc<T>,
 }
